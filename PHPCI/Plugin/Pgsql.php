@@ -11,6 +11,7 @@ namespace PHPCI\Plugin;
 
 use PDO;
 use PHPCI\Builder;
+use PHPCI\Helper\Lang;
 use PHPCI\Model\Build;
 
 /**
@@ -81,14 +82,85 @@ class Pgsql implements \PHPCI\Plugin
         try {
             $opts = array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION);
             $pdo = new PDO('pgsql:host=' . $this->host, $this->user, $this->pass, $opts);
-
+            
             foreach ($this->queries as $query) {
-                $pdo->query($this->phpci->interpolate($query));
+                if (!is_array($query)) {
+                    // Simple query
+                    $pdo->query($this->phpci->interpolate($query));
+                }
+                elseif (isset($query['queries'])) {
+                    foreach($query['queries'] as $query_stm) {
+                        // Simple query
+                        $pdo->query($this->phpci->interpolate($query_stm));
+                    }
+                }
+                elseif (isset($query['import'])) {
+                    // SQL file execution
+                    $this->executeFile($query['import']);
+                }
+                else {
+                    throw new \Exception(Lang::get('invalid_command'));
+                }
             }
         } catch (\Exception $ex) {
             $this->phpci->logFailure($ex->getMessage());
             return false;
         }
         return true;
+    }
+    
+    /**
+     * @param string $query
+     * @return boolean
+     * @throws \Exception
+     */
+    protected function executeFile($query)
+    {
+        if (!isset($query['file'])) {
+            throw new \Exception(Lang::get('import_file_key'));
+        }
+
+        $import_file = $this->phpci->buildPath . $this->phpci->interpolate($query['file']);
+        if (!is_readable($import_file)) {
+            throw new \Exception(Lang::get('cannot_open_import', $import_file));
+        }
+
+        $database = isset($query['database']) ? $this->phpci->interpolate($query['database']) : null;
+
+        $import_command = $this->getImportCommand($import_file, $database);
+        if (!$this->phpci->executeCommand($import_command)) {
+            throw new \Exception(Lang::get('unable_to_execute'));
+        }
+
+        return true;
+    }
+
+    /**
+     * Builds the Postgresql import command required to import/execute the specified file
+     * @param string $import_file Path to file, relative to the build root
+     * @param string $database If specified, this database is selected before execution
+     * @return string
+     */
+    protected function getImportCommand($import_file, $database = null)
+    {
+        $decompression = array(
+            'bz2' => '| bzip2 --decompress',
+            'gz' => '| gzip --decompress',
+        );
+
+        $extension = strtolower(pathinfo($import_file, PATHINFO_EXTENSION));
+        $decomp_cmd = '';
+        if (array_key_exists($extension, $decompression)) {
+            $decomp_cmd = $decompression[$extension];
+        }
+
+        $args = array(
+            ':import_file' => escapeshellarg($import_file),
+            ':decomp_cmd' => $decomp_cmd,
+            ':user' => escapeshellarg($this->user),
+            ':pass' => escapeshellarg($this->pass),
+            ':database' => ($database === null)? '': escapeshellarg($database),
+        );
+        return strtr('export PGPASSWORD=:pass; cat :import_file :decomp_cmd | psql -U :user -d :database', $args);
     }
 }

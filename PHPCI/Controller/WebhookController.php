@@ -112,6 +112,22 @@ class WebhookController extends \b8\Controller
     }
 
     /**
+     * Called by POSTing to /webhook/svn/<project_id>?branch=<branch>&commit=<commit>
+     *
+     * @param string $projectId
+     */
+    public function svn($projectId)
+    {
+        $project = $this->fetchProject($projectId, array('local', 'remote'));
+        $branch = $this->getParam('branch', $project->getBranch());
+        $commit = $this->getParam('commit');
+        $commitMessage = $this->getParam('message');
+        $author = $this->getParam('author');
+
+        return $this->createBuild($project, $commit, $branch, $author, $commitMessage);
+    }
+    
+    /**
      * Called by POSTing to /webhook/git/<project_id>?branch=<branch>&commit=<commit>
      *
      * @param string $projectId
